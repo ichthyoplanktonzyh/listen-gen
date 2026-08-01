@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
 
+from .package import PackageWriteError
+
 MACHINE_EVENT_SCHEMA = "listen_gen.machine-event.v1"
 MACHINE_PROTOCOL_VERSION = 1
 TOOL_ID = "listen-gen"
@@ -82,6 +84,8 @@ class MachineEventWriter:
 def stable_error(error: BaseException) -> tuple[str, str]:
     message = str(error)
     lowered = message.lower()
+    if isinstance(error, PackageWriteError):
+        return "package_write_failed", "package output could not be written"
     if "probe" in lowered or "audio stream" in lowered:
         return "media_probe_failed", message
     if "preprocess" in lowered or "ffmpeg" in lowered:
@@ -90,8 +94,6 @@ def stable_error(error: BaseException) -> tuple[str, str]:
         return "provider_failed", message
     if isinstance(error, (OSError, json.JSONDecodeError)):
         return "invalid_input", "input could not be read or decoded"
-    if "package" in lowered or "zip" in lowered:
-        return "package_write_failed", message
     return "invalid_input", message
 
 

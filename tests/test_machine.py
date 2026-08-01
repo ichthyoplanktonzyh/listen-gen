@@ -111,6 +111,27 @@ class MachineProtocolTests(unittest.TestCase):
                 self.assertNotIn(private_value, completed.stdout)
             self.assertEqual(completed.stderr, "")
 
+    def test_output_write_failure_has_typed_redacted_code(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invalid_parent = root / "not-a-directory"
+            invalid_parent.write_text("occupied", encoding="utf-8")
+            output = invalid_parent / "lesson.listenpkg"
+            completed = subprocess.run(
+                self.fixture_arguments(output),
+                cwd=ROOT,
+                env=self.environment(),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 2)
+            events = [json.loads(line) for line in completed.stdout.splitlines()]
+            self.assertEqual(events[-1]["event"], "failed")
+            self.assertEqual(events[-1]["code"], "package_write_failed")
+            self.assertEqual(events[-1]["message"], "package output could not be written")
+            self.assertNotIn(str(root), completed.stdout)
+            self.assertEqual(completed.stderr, "")
+
     def _wait_for_event(self, process: subprocess.Popen[str], name: str) -> list[dict[str, object]]:
         assert process.stdout is not None
         events = []

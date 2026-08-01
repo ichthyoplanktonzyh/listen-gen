@@ -27,6 +27,10 @@ class ConversionError(ValueError):
     """The legacy document cannot be represented by the v1 package."""
 
 
+class PackageWriteError(OSError):
+    """A package could not be completed at its requested destination."""
+
+
 @dataclass(frozen=True)
 class ResourceFile:
     kind: str
@@ -540,7 +544,7 @@ def _zip_info(path: str) -> zipfile.ZipInfo:
     return info
 
 
-def write_package(
+def _write_package(
     output_path: Path, manifest: dict[str, Any], resources: list[ResourceFile]
 ) -> str:
     """Write a v1 package using the contract's deterministic ZIP profile."""
@@ -577,6 +581,17 @@ def write_package(
         return digest.hexdigest()
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def write_package(
+    output_path: Path, manifest: dict[str, Any], resources: list[ResourceFile]
+) -> str:
+    try:
+        return _write_package(output_path, manifest, resources)
+    except PackageWriteError:
+        raise
+    except OSError as error:
+        raise PackageWriteError("package output could not be written") from error
 
 
 def package_from_lltimeline(
