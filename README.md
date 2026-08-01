@@ -4,6 +4,10 @@
 output is a content package consumed by `listen-core`; model runtimes and raw
 provider payloads are not part of that interface.
 
+Project terminology is defined in [`CONTEXT.md`](CONTEXT.md). Read
+[`ECOSYSTEM.md`](ECOSYSTEM.md) for the shared product architecture, repository
+boundaries, accepted invariants, and current implementation status.
+
 The production entry point transcribes media behind a provider-neutral ASR
 adapter and writes native v1 `subtitle_text_track` and `word_timeline`
 resources. The offline fixture provider exercises the full CLI without model
