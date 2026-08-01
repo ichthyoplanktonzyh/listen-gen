@@ -1,10 +1,15 @@
 {
   "authority": {
+    "commit": "f5ccf422d7d1e4dd79d2134f3baba4f1eb2c7907",
     "path": "contracts/content-package/v1",
     "repository": "ichthyoplanktonzyh/listen-core"
   },
   "manifest_schema_id": "https://listen.dev/contracts/content-package/v1/manifest.schema.json",
   "package_schema": "listen.resource-package.v1",
   "resource_schema_id": "https://listen.dev/contracts/content-package/v1/resource.schema.json",
+  "schema_sha256": {
+    "manifest.schema.json": "af33601a7a43604d50b8c9462ecc49008a6fe690765389de294cd4557c2fb34a",
+    "resource.schema.json": "d5cf153d7e981b2d8f7cdf8f811acd8aada0d87020e0d9f81ab6b777b6741490"
+  },
   "schema_version": 1
 }

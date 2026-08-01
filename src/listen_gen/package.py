@@ -8,7 +8,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 PACKAGE_SCHEMA = "listen.resource-package.v1"
 SOURCE_SCHEMA = "llplayer.timeline.v1"
@@ -579,9 +579,18 @@ def write_package(
         temporary_path.unlink(missing_ok=True)
 
 
-def package_from_lltimeline(input_path: Path, output_path: Path) -> dict[str, Any]:
+def package_from_lltimeline(
+    input_path: Path,
+    output_path: Path,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    if progress is not None:
+        progress("validating")
     raw = input_path.read_bytes()
     manifest, resources, warnings = convert_lltimeline(raw)
+    if progress is not None:
+        progress("building_package")
     package_sha256 = write_package(output_path, manifest, resources)
     return {
         "status": "created",
@@ -589,5 +598,6 @@ def package_from_lltimeline(input_path: Path, output_path: Path) -> dict[str, An
         "source_sha256": _sha256(raw),
         "package_sha256": package_sha256,
         "resource_count": len(resources),
+        "resources": manifest["resources"],
         "warnings": warnings,
     }

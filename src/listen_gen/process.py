@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 
 class ProcessTimedOut(Exception):
@@ -15,6 +15,10 @@ class ProcessTimedOut(Exception):
 
 
 class ProcessOutputTooLarge(Exception):
+    pass
+
+
+class ProcessCancelled(Exception):
     pass
 
 
@@ -45,6 +49,7 @@ def run_argv(
     *,
     timeout_seconds: float,
     stdout_limit_bytes: int | None,
+    cancellation_requested: Callable[[], bool] | None = None,
 ) -> ProcessResult:
     """Run argv without a shell, bounding captured output and killing its process group."""
     capture_stdout = stdout_limit_bytes is not None
@@ -60,10 +65,19 @@ def run_argv(
     deadline = time.monotonic() + timeout_seconds
     if not capture_stdout:
         try:
-            return ProcessResult(process.wait(timeout=timeout_seconds), b"")
-        except subprocess.TimeoutExpired as error:
+            while True:
+                if cancellation_requested is not None and cancellation_requested():
+                    raise ProcessCancelled
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ProcessTimedOut
+                try:
+                    return ProcessResult(process.wait(timeout=min(remaining, 0.05)), b"")
+                except subprocess.TimeoutExpired:
+                    pass
+        except BaseException:
             _terminate_group(process)
-            raise ProcessTimedOut from error
+            raise
 
     assert process.stdout is not None
     chunks: queue.Queue[bytes | None] = queue.Queue(maxsize=2)
@@ -80,13 +94,17 @@ def run_argv(
     output = bytearray()
     try:
         while True:
+            if cancellation_requested is not None and cancellation_requested():
+                raise ProcessCancelled
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ProcessTimedOut
             try:
-                chunk = chunks.get(timeout=remaining)
+                chunk = chunks.get(timeout=min(remaining, 0.05))
             except queue.Empty as error:
-                raise ProcessTimedOut from error
+                if deadline - time.monotonic() <= 0:
+                    raise ProcessTimedOut from error
+                continue
             if chunk is None:
                 break
             if len(output) + len(chunk) > stdout_limit_bytes:
@@ -98,7 +116,7 @@ def run_argv(
         result = ProcessResult(process.wait(timeout=remaining), bytes(output))
         reader.join()
         return result
-    except (ProcessTimedOut, ProcessOutputTooLarge):
+    except BaseException:
         _terminate_group(process)
         raise
     finally:

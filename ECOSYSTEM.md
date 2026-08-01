@@ -100,10 +100,20 @@ provider-neutral ASR adapter, fingerprints the original media bytes, and
 writes the v1 package atomically. Fixture and fake-command tests exercise the
 path without paid or live model calls.
 
+The CLI also has an opt-in `listen_gen.machine-event.v1` NDJSON protocol for
+App orchestration. It reports versioned lifecycle phases without speculative
+percentages, returns a package digest/resource inventory/warnings on success,
+uses stable redacted failure codes, and turns SIGINT/SIGTERM into a cancelled
+terminal event after terminating the active media/provider process group and
+cleaning temporary artifacts. The default single-JSON output remains available
+for compatibility.
+
 `listen-gen package from-lltimeline` exists only for migration compatibility;
 LLTimeline is not the new production interface. The canonical v1 package
 schemas remain in `listen-core/contracts/content-package/v1` and are not
-copied here. V1 attachment uses the exact SHA-256 of the original media bytes.
+copied here. `contracts.lock.json` fixes the dependency to an exact Core commit
+and authoritative schema digests. V1 attachment uses the exact SHA-256 of the
+original media bytes.
 
 The following are accepted design areas but are not implemented contracts:
 

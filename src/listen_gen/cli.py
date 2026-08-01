@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 from pathlib import Path
+from typing import Any
 
 from .asr import (
     CommandAsrAdapter,
@@ -12,7 +14,16 @@ from .asr import (
     package_media,
 )
 from .media import FfmpegAudioPreprocessor
+from .machine import (
+    CancellationRequested,
+    CancellationState,
+    MachineEventWriter,
+    cancellation_exit_code,
+    cancellation_signals,
+    stable_error,
+)
 from .package import ConversionError, package_from_lltimeline
+from .process import ProcessCancelled
 
 
 def parser() -> argparse.ArgumentParser:
@@ -47,57 +58,120 @@ def parser() -> argparse.ArgumentParser:
     native.add_argument("--media-kind", required=True, choices=["audio", "video"])
     native.add_argument("--duration-ms", required=True, type=int)
     native.add_argument("--created-at-ms", required=True, type=int)
+    native.add_argument(
+        "--machine-events",
+        action="store_true",
+        help="write the versioned machine protocol as NDJSON to stdout",
+    )
     legacy = package_commands.add_parser(
         "from-lltimeline", help="convert an LLTimeline v1 document"
     )
     legacy.add_argument("input", type=Path)
     legacy.add_argument("--output", required=True, type=Path)
+    legacy.add_argument(
+        "--machine-events",
+        action="store_true",
+        help="write the versioned machine protocol as NDJSON to stdout",
+    )
     return root
+
+
+def _machine_result(result: dict[str, Any]) -> dict[str, Any]:
+    machine_result = {
+        "package_sha256": f"sha256:{result['package_sha256']}",
+        "resources": result["resources"],
+        "warnings": result["warnings"],
+    }
+    if "media_fingerprint" in result:
+        machine_result["media_fingerprint"] = result["media_fingerprint"]
+    return machine_result
+
+
+def _run(args: argparse.Namespace, state: CancellationState, writer: MachineEventWriter | None) -> dict[str, Any]:
+    progress = None if writer is None else lambda phase: writer.emit("phase", phase=phase)
+    if args.package_command == "from-media":
+        if args.provider == "fixture":
+            if args.fixture is None:
+                raise ConversionError("--fixture is required for the fixture provider")
+            adapter = FixtureAsrAdapter(args.fixture, progress=progress)
+        else:
+            if args.command is None:
+                raise ConversionError("--command is required for the command provider")
+            command_adapter = CommandAsrAdapter(
+                args.command,
+                args.command_arg,
+                args.command_timeout_seconds,
+                progress=progress,
+                cancellation_requested=state.requested,
+            )
+            adapter = PreprocessingAsrAdapter(
+                command_adapter,
+                FfmpegAudioPreprocessor(
+                    ffprobe_executable=args.ffprobe_command,
+                    ffmpeg_executable=args.ffmpeg_command,
+                    timeout_seconds=args.media_command_timeout_seconds,
+                    progress=progress,
+                    cancellation_requested=state.requested,
+                ),
+                audio_stream_index=args.audio_stream_index,
+            )
+        return package_media(
+            args.input,
+            args.output,
+            adapter,
+            title=args.title,
+            media_kind=args.media_kind,
+            duration_ms=args.duration_ms,
+            created_at_ms=args.created_at_ms,
+            progress=progress,
+        )
+    return package_from_lltimeline(args.input, args.output, progress=progress)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    machine = bool(args.machine_events)
+    writer = MachineEventWriter() if machine else None
+    state = CancellationState()
+    if writer is not None:
+        writer.protocol()
+        operation = f"package.{args.package_command}"
+        writer.emit("started", operation=operation)
     try:
-        if args.package_command == "from-media":
-            if args.provider == "fixture":
-                if args.fixture is None:
-                    raise ConversionError("--fixture is required for the fixture provider")
-                adapter = FixtureAsrAdapter(args.fixture)
-            else:
-                if args.command is None:
-                    raise ConversionError("--command is required for the command provider")
-                command_adapter = CommandAsrAdapter(
-                    args.command, args.command_arg, args.command_timeout_seconds
-                )
-                adapter = PreprocessingAsrAdapter(
-                    command_adapter,
-                    FfmpegAudioPreprocessor(
-                        ffprobe_executable=args.ffprobe_command,
-                        ffmpeg_executable=args.ffmpeg_command,
-                        timeout_seconds=args.media_command_timeout_seconds,
-                    ),
-                    audio_stream_index=args.audio_stream_index,
-                )
-            result = package_media(
-                args.input,
-                args.output,
-                adapter,
-                title=args.title,
-                media_kind=args.media_kind,
-                duration_ms=args.duration_ms,
-                created_at_ms=args.created_at_ms,
-            )
-        else:
-            result = package_from_lltimeline(args.input, args.output)
-    except (ConversionError, OSError, json.JSONDecodeError) as error:
-        print(
-            json.dumps(
-                {"status": "failed", "error": str(error)},
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-            file=sys.stderr,
+        with cancellation_signals(state):
+            result = _run(args, state, writer)
+    except (CancellationRequested, ProcessCancelled) as cancelled:
+        signal_number = (
+            cancelled.signal_number
+            if isinstance(cancelled, CancellationRequested)
+            else state.signal_number or signal.SIGINT
         )
+        if writer is not None:
+            writer.emit("cancelled", code="cancelled")
+        else:
+            print(json.dumps({"status": "cancelled"}, sort_keys=True), file=sys.stderr)
+        return cancellation_exit_code(signal_number)
+    except (ConversionError, OSError, json.JSONDecodeError) as error:
+        if writer is not None:
+            code, message = stable_error(error)
+            writer.emit("failed", code=code, message=message)
+        else:
+            print(
+                json.dumps(
+                    {"status": "failed", "error": str(error)},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
         return 2
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    except Exception:
+        if writer is None:
+            raise
+        writer.emit("failed", code="internal_error", message="generation failed unexpectedly")
+        return 2
+    if writer is not None:
+        writer.emit("completed", **_machine_result(result))
+    else:
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0

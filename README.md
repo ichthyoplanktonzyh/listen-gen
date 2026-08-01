@@ -20,6 +20,32 @@ python -m listen_gen package from-media input.wav \
   --created-at-ms 1785542400000 --output lesson.listenpkg
 ```
 
+## Machine orchestration protocol
+
+The default CLI output remains one JSON result for compatibility. App and
+other supervisors can opt into a versioned NDJSON stream by adding
+`--machine-events` to either package command. Every line has schema
+`listen_gen.machine-event.v1`, `protocol_version: 1`, a zero-based monotonic
+`sequence`, and the listen-gen tool identity/version.
+
+The stream contains one `protocol` header, exactly one `started` event, zero or
+more named `phase` events, and exactly one `completed`, `failed`, or `cancelled`
+terminal event. Phases include `validating`, `probing_media`,
+`normalizing_audio`, `transcribing`, and `building_package`; the protocol does
+not invent percentage progress.
+
+The `completed` event directly contains a `sha256:` package digest, resource
+inventory, warnings, and the original-media fingerprint for native generation.
+It does not echo the local output path. Failures use stable categories:
+`invalid_input`, `media_probe_failed`, `audio_preprocessing_failed`,
+`provider_failed`, `package_write_failed`, and `internal_error`. Provider
+stdout/stderr, raw responses, command arguments, and local paths are excluded.
+
+SIGINT and SIGTERM produce a `cancelled` terminal event and exit with 130 and
+143 respectively. An in-flight ffprobe, ffmpeg, or provider wrapper is run in
+its own process group, and cancellation kills that entire group before
+temporary normalized audio and incomplete package files are removed.
+
 `normalized-asr.json` is the provider-neutral boundary: it contains timed
 segments and word character spans, plus versioned provider/model provenance.
 Production provider adapters can be added behind the same interface without
@@ -83,7 +109,8 @@ an atomic replacement, so a failed build does not truncate an existing package.
 ## Contract authority
 
 The canonical schema is owned by `listen-core` at
-`contracts/content-package/v1`. `contracts.lock.json` records that dependency.
+`contracts/content-package/v1`. `contracts.lock.json` pins the exact Core
+commit and SHA-256 of both authoritative JSON schemas.
 This repository does not carry a schema copy.
 
 ## Development

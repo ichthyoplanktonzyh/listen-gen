@@ -6,7 +6,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .media import AudioPreprocessor
 from .process import ProcessOutputTooLarge, ProcessTimedOut, run_argv
@@ -72,10 +72,13 @@ class AsrAdapter(Protocol):
 class FixtureAsrAdapter:
     """Offline adapter for contract tests; it never contacts a service."""
 
-    def __init__(self, fixture_path: Path):
+    def __init__(self, fixture_path: Path, *, progress: Callable[[str], None] | None = None):
         self.fixture_path = fixture_path
+        self.progress = progress
 
     def transcribe(self, media_path: Path) -> AsrTranscript:
+        if self.progress is not None:
+            self.progress("transcribing")
         if not media_path.is_file():
             raise ConversionError("media input is not a regular file")
         raw = json.loads(self.fixture_path.read_text(encoding="utf-8"))
@@ -90,7 +93,15 @@ class CommandAsrAdapter:
     to stdout. Shell parsing is deliberately never involved.
     """
 
-    def __init__(self, executable: str, arguments: list[str], timeout_seconds: float):
+    def __init__(
+        self,
+        executable: str,
+        arguments: list[str],
+        timeout_seconds: float,
+        *,
+        progress: Callable[[str], None] | None = None,
+        cancellation_requested: Callable[[], bool] | None = None,
+    ):
         if not executable:
             raise ConversionError("ASR command executable must be non-empty")
         if arguments.count("{media}") != 1:
@@ -100,8 +111,12 @@ class CommandAsrAdapter:
         self.executable = executable
         self.arguments = tuple(arguments)
         self.timeout_seconds = timeout_seconds
+        self.progress = progress
+        self.cancellation_requested = cancellation_requested
 
     def transcribe(self, media_path: Path) -> AsrTranscript:
+        if self.progress is not None:
+            self.progress("transcribing")
         if not media_path.is_file():
             raise ConversionError("media input is not a regular file")
         argv = [
@@ -113,6 +128,7 @@ class CommandAsrAdapter:
                 argv,
                 timeout_seconds=self.timeout_seconds,
                 stdout_limit_bytes=ASR_STDOUT_LIMIT_BYTES,
+                cancellation_requested=self.cancellation_requested,
             )
         except ProcessTimedOut as error:
             raise ConversionError("ASR command timed out without producing a usable result") from error
@@ -319,7 +335,10 @@ def package_media(
     media_kind: str,
     duration_ms: int,
     created_at_ms: int,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
+    if progress is not None:
+        progress("validating")
     if not media_path.is_file():
         raise ConversionError("media input is not a regular file")
     if not title.strip():
@@ -388,9 +407,12 @@ def package_media(
             "required": resource.required, "size_bytes": len(resource.body),
         } for resource in resources],
     }
+    if progress is not None:
+        progress("building_package")
     package_sha256 = write_package(output_path, manifest, resources)
     return {
         "status": "created", "output": str(output_path),
         "media_fingerprint": media_fingerprint, "package_sha256": package_sha256,
-        "resource_count": len(resources), "warnings": [],
+        "resource_count": len(resources),
+        "resources": manifest["resources"], "warnings": [],
     }

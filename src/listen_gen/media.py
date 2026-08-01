@@ -5,7 +5,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ContextManager, Iterator, Protocol
+from typing import Any, Callable, ContextManager, Iterator, Protocol
 
 from .package import ConversionError
 from .process import ProcessOutputTooLarge, ProcessTimedOut, run_argv
@@ -43,6 +43,8 @@ class FfmpegAudioPreprocessor:
         ffprobe_executable: str = "ffprobe",
         ffmpeg_executable: str = "ffmpeg",
         timeout_seconds: float = 300.0,
+        progress: Callable[[str], None] | None = None,
+        cancellation_requested: Callable[[], bool] | None = None,
     ):
         if not ffprobe_executable or not ffmpeg_executable:
             raise ConversionError("media tool executables must be non-empty")
@@ -51,8 +53,12 @@ class FfmpegAudioPreprocessor:
         self.ffprobe_executable = ffprobe_executable
         self.ffmpeg_executable = ffmpeg_executable
         self.timeout_seconds = timeout_seconds
+        self.progress = progress
+        self.cancellation_requested = cancellation_requested
 
     def _run_probe(self, media_path: Path) -> tuple[AudioStream, ...]:
+        if self.progress is not None:
+            self.progress("probing_media")
         try:
             completed = run_argv(
                 [
@@ -67,6 +73,7 @@ class FfmpegAudioPreprocessor:
                 ],
                 timeout_seconds=self.timeout_seconds,
                 stdout_limit_bytes=PROBE_STDOUT_LIMIT_BYTES,
+                cancellation_requested=self.cancellation_requested,
             )
         except ProcessTimedOut as error:
             raise ConversionError("media probe timed out") from error
@@ -126,6 +133,8 @@ class FfmpegAudioPreprocessor:
         stream = self._select_stream(self._run_probe(media_path), audio_stream_index)
         with tempfile.TemporaryDirectory(prefix="listen-gen-audio-") as directory:
             output_path = Path(directory) / "normalized.wav"
+            if self.progress is not None:
+                self.progress("normalizing_audio")
             try:
                 completed = run_argv(
                     [
@@ -151,6 +160,7 @@ class FfmpegAudioPreprocessor:
                     ],
                     timeout_seconds=self.timeout_seconds,
                     stdout_limit_bytes=None,
+                    cancellation_requested=self.cancellation_requested,
                 )
             except ProcessTimedOut as error:
                 raise ConversionError("audio preprocessing timed out") from error
