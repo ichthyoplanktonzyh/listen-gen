@@ -49,7 +49,9 @@ def _word_tokens(text: str) -> list[tuple[int, int, str]]:
     ]
 
 
-def _convert(json_path: Path, model_path: Path, model_version: str) -> dict:
+def _convert(
+    json_path: Path, model_path: Path, model_version: str, duration_ms: int
+) -> dict:
     with json_path.open(encoding="utf-8") as handle:
         raw = json.load(handle)
 
@@ -130,6 +132,18 @@ def _convert(json_path: Path, model_path: Path, model_version: str) -> dict:
         if not words:
             raise ValueError(f"whisper.cpp segment {text[:40]!r} has no alignable words")
 
+        if segment_end > duration_ms:
+            segment_end = duration_ms
+        if segment_start >= segment_end:
+            continue
+        words = [
+            word for word in words
+            if word["start_ms"] < segment_end
+        ]
+        for word in words:
+            if word["end_ms"] > segment_end:
+                word["end_ms"] = segment_end
+
         segments.append({
             "start_ms": segment_start,
             "end_ms": segment_end,
@@ -149,12 +163,41 @@ def _convert(json_path: Path, model_path: Path, model_version: str) -> dict:
     }
 
 
+def _probe_duration_ms(media: Path, ffprobe: str) -> int | None:
+    """Best-effort media duration from ffprobe, in milliseconds."""
+    try:
+        completed = subprocess.run(
+            [
+                ffprobe,
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "json",
+                str(media),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return None
+        data = json.loads(completed.stdout)
+        duration = (data.get("format") or {}).get("duration")
+        if duration is None:
+            return None
+        return round(float(duration) * 1000)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("media", type=Path)
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--whisper-cli", default="whisper-cli")
     parser.add_argument("--model-version", default="ggml")
+    parser.add_argument("--duration-ms", type=int, default=None)
+    parser.add_argument("--ffprobe", default="ffprobe")
     args = parser.parse_args(argv)
 
     if not args.media.is_file():
@@ -163,6 +206,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args.model.is_file():
         print(f"whisper model file not found: {args.model}", file=sys.stderr)
         return 2
+    duration_ms = args.duration_ms
+    if duration_ms is None:
+        duration_ms = _probe_duration_ms(args.media, args.ffprobe)
+        if duration_ms is None:
+            print("could not determine media duration; pass --duration-ms", file=sys.stderr)
+            return 2
 
     with tempfile.TemporaryDirectory(prefix="whisper-wrapper-") as tmp:
         output_prefix = str(Path(tmp) / "whisper")
@@ -184,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             print("whisper-cli did not write its JSON output", file=sys.stderr)
             return 3
         try:
-            document = _convert(json_path, args.model, args.model_version)
+            document = _convert(json_path, args.model, args.model_version, duration_ms)
         except ValueError as error:
             print(f"whisper conversion failed: {error}", file=sys.stderr)
             return 4
