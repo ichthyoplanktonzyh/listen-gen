@@ -1,54 +1,77 @@
 # listen-gen Agent Guide
 
-## First read
+单人项目，owner 独立开发。这份文件只写 **agent 自己查不到的硬约束**。
+代码结构去读代码——`src/listen_gen/` 一共几个文件，读完比读任何目录清单快。
 
-Before changing this repository, read these files completely in order:
+**Mission**：生成昂贵、可复用的语言学习资源，打包给 `listen-core`。
+保持模型/provider 实现可替换，保持交换契约稳定。
 
-1. `AGENT.md`
-2. `CONTEXT.md`
-3. `ECOSYSTEM.md`
-4. `README.md`
+## 开发文化
 
-Treat the current code, the living ecosystem context, and the canonical Core
-contract as authoritative. Do not infer current behavior from an old ADR or a
-future-state design. Keep cross-repository boundary or contract changes
-coordinated rather than changing one repository's interpretation silently.
+> 代码和文档是「当前最优解的快照」，不是承诺，不是宪法。
 
-## Mission
+1. **事实 > 文档 > 决策记录。** 当前代码、活的生态上下文、以及 core 的规范契约
+   才是权威。**不要从旧 ADR 或未来态设计去推断当前行为。**
+   文档与现实不符时，文档是 bug——顺手改掉。
+2. **只有三类约束是真的**：物理与技术现实、说得出理由的业界最佳实践、
+   以及外部世界的边界（见下）。其余全部可推翻。「项目里现在是这么写的」不构成理由。
+3. **破坏性变更是廉价的。** 这个仓库还年轻、没有 remote、没有外部消费者。
+   结构错了就重写，不要在错的结构上打补丁。
+4. **要有主张。** 给出推荐并执行，不要罗列选项让 owner 挑。
+   发现更好的做法就说出来，哪怕它跟既有实现冲突。
+5. **冲突就地解决。** 说明冲突 → 给出更优理由 → 直接做 → 顺手更新被推翻的文档。
+   只有不可逆动作和产品方向取舍需要先问。
+6. **诚实不可推翻。** 见「安全与隐私」。
 
-Generate expensive, reusable language-learning resources and package them for
-`listen-core`. Keep model/provider implementations replaceable and keep the
-exchange contract stable.
+## 硬约束
 
-## Contract ownership
+### 契约归属
 
-- `listen-core/contracts/content-package/v1` is the only schema authority.
-- Do not copy the schema into this repository.
-- Update `contracts.lock.json` when the pinned schema identity/version changes.
-- Package output must contain only typed, allowlisted resources.
+- `listen-core/contracts/content-package/v1` 是唯一的 schema 权威。
+- **不要把 schema 复制到这个仓库。** 需要跟随时更新 `contracts.lock.json`
+  里钉住的 schema 身份/版本。
+- 包输出只能包含类型化的、在允许清单内的资源。
+- 跨仓库的边界或契约改动要协同，不要单方面改一个仓库对它的解释。
 
-## Safety and privacy
+### 安全与隐私
 
-- Never include local filesystem paths, secrets, raw provider responses, or
-  learner facts in a package.
-- Unknown LLTimeline artifacts produce warnings; never forward their payloads.
-- Tests must be deterministic and must not use paid/live model calls.
+这是不可推翻的一条：**包是要发出去的东西**。
 
-## Scope discipline
+- 永远不要把本地文件系统路径、密钥、provider 原始响应、或学习者的个人事实
+  打进包里。
+- 未知的 LLTimeline artifact 只产生 warning，**永远不要转发它的 payload**。
+- 测试必须确定性，不得调用付费/live 模型。
 
-The compatibility converter is not the production pipeline. Do not copy the
-old `timeline-production` tree here. Move generation capabilities in coherent
-later slices behind the package contract.
+### 范围纪律
 
-`ECOSYSTEM.md` defines this repository's product boundary. In particular,
-catalog and registry services, package installation and active selection,
-learner records, learning UI, and learner-dependent real-time capabilities do
-not belong in `listen-gen`.
+兼容转换器不是生产流水线。不要把旧的 `timeline-production` 树复制过来。
+生成能力按连贯的切片逐步迁移，且始终藏在包契约后面。
 
-## Git
+`ECOSYSTEM.md` 定义本仓库的产品边界。目录与注册服务、包安装与激活选择、
+学习者记录、学习 UI、依赖学习者的实时能力，都**不**属于 `listen-gen`。
 
-- Preserve unrelated work.
-- Use focused changes and Conventional Commit subjects when asked to commit.
-- Do not commit, push, or publish unless explicitly requested.
-- This repository currently has no remote. Do not create one or decide its
-  owner or visibility without an explicit user decision.
+### Git
+
+- 保留无关的改动。
+- 用聚焦的改动和 Conventional Commit 标题。
+- 不主动 commit / push / 发布，除非被明确要求。
+- remote 是 `ichthyoplanktonzyh/listen-gen`（private，2026-08-04 由 owner 决定并创建）。
+  **本地历史尚未 push 过**——首次 push 需要 owner 明确授权，之后照常。
+
+## 验证
+
+```sh
+.venv/bin/pytest -q
+```
+
+没有 lint / type-check 配置，也**没有任何 CI**（GitHub Actions 账户欠费停用，
+且本仓库无 remote）。上面这一条就是全部的质量闸门。报告时给出确切的输出行。
+
+## 活文档
+
+- `CONTEXT.md` — 领域词汇表
+- `ECOSYSTEM.md` — 产品边界（按需查，不必每次通读）
+- `README.md` — 上手与 CLI 用法
+
+按需读，不要为了"读完再动手"而通读。这三份加起来比源码还长——
+有疑问时以代码和 core 的契约为准。
