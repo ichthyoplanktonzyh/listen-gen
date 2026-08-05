@@ -23,6 +23,7 @@ from .machine import (
     stable_error,
 )
 from .package import ConversionError, InvalidArgumentError, package_from_lltimeline
+from .whisper_cpp import WhisperCppAsrAdapter
 from .process import ProcessCancelled
 
 
@@ -36,8 +37,25 @@ def parser() -> argparse.ArgumentParser:
     )
     native.add_argument("input", type=Path)
     native.add_argument("--output", required=True, type=Path)
-    native.add_argument("--provider", required=True, choices=["fixture", "command"])
+    native.add_argument(
+        "--provider", required=True, choices=["fixture", "command", "whisper-cpp"]
+    )
     native.add_argument("--fixture", type=Path, help="normalized JSON for the fixture provider")
+    native.add_argument(
+        "--model",
+        type=Path,
+        help="whisper.cpp model file (required by the whisper-cpp provider)",
+    )
+    native.add_argument(
+        "--whisper-cli",
+        default="whisper-cli",
+        help="whisper.cpp executable for the whisper-cpp provider",
+    )
+    native.add_argument(
+        "--model-version",
+        default="ggml",
+        help="model provenance recorded in the package for the whisper-cpp provider",
+    )
     native.add_argument("--command", help="external ASR wrapper executable; no shell is used")
     native.add_argument(
         "--command-arg",
@@ -141,17 +159,34 @@ def _run(args: argparse.Namespace, state: CancellationState, writer: MachineEven
                 raise InvalidArgumentError("--fixture is required for the fixture provider")
             adapter = FixtureAsrAdapter(args.fixture, progress=progress)
         else:
-            if args.command is None:
-                raise InvalidArgumentError("--command is required for the command provider")
-            command_adapter = CommandAsrAdapter(
-                args.command,
-                _command_arguments(args),
-                args.command_timeout_seconds,
-                progress=progress,
-                cancellation_requested=state.requested,
-            )
+            if args.provider == "whisper-cpp":
+                if args.model is None:
+                    raise InvalidArgumentError(
+                        "--model is required for the whisper-cpp provider"
+                    )
+                inner = WhisperCppAsrAdapter(
+                    args.model,
+                    whisper_cli=args.whisper_cli,
+                    duration_ms=args.duration_ms,
+                    timeout_seconds=args.command_timeout_seconds,
+                    model_version=args.model_version,
+                    progress=progress,
+                    cancellation_requested=state.requested,
+                )
+            else:
+                if args.command is None:
+                    raise InvalidArgumentError(
+                        "--command is required for the command provider"
+                    )
+                inner = CommandAsrAdapter(
+                    args.command,
+                    _command_arguments(args),
+                    args.command_timeout_seconds,
+                    progress=progress,
+                    cancellation_requested=state.requested,
+                )
             adapter = PreprocessingAsrAdapter(
-                command_adapter,
+                inner,
                 FfmpegAudioPreprocessor(
                     ffprobe_executable=args.ffprobe_command,
                     ffmpeg_executable=args.ffmpeg_command,
