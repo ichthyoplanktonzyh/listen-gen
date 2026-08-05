@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
 
-from .package import PackageWriteError
+from .package import InvalidArgumentError, PackageWriteError
 
 MACHINE_EVENT_SCHEMA = "listen_gen.machine-event.v1"
 MACHINE_PROTOCOL_VERSION = 1
@@ -86,6 +86,11 @@ def stable_error(error: BaseException) -> tuple[str, str]:
     lowered = message.lower()
     if isinstance(error, PackageWriteError):
         return "package_write_failed", "package output could not be written"
+    # Typed checks come before the substring heuristics below, which read the
+    # message rather than the failure: a usage error naming "provider" is not
+    # a provider failure, and saying so would report a stage that never ran.
+    if isinstance(error, InvalidArgumentError):
+        return "invalid_input", message
     if "probe" in lowered or "audio stream" in lowered:
         return "media_probe_failed", message
     if "preprocess" in lowered or "ffmpeg" in lowered:

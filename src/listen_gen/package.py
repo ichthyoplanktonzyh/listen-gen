@@ -27,6 +27,16 @@ class ConversionError(ValueError):
     """The legacy document cannot be represented by the v1 package."""
 
 
+class InvalidArgumentError(ConversionError):
+    """The caller's arguments are wrong, so nothing was ever run.
+
+    Its own type because `stable_error` otherwise classifies by substring: a
+    usage message that merely mentions "provider" or "audio stream" would be
+    reported as a provider or probe failure, telling the supervisor a stage
+    failed when no stage ever started.
+    """
+
+
 class PackageWriteError(OSError):
     """A package could not be completed at its requested destination."""
 

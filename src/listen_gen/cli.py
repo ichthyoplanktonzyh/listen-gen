@@ -22,7 +22,7 @@ from .machine import (
     cancellation_signals,
     stable_error,
 )
-from .package import ConversionError, package_from_lltimeline
+from .package import ConversionError, InvalidArgumentError, package_from_lltimeline
 from .process import ProcessCancelled
 
 
@@ -43,7 +43,22 @@ def parser() -> argparse.ArgumentParser:
         "--command-arg",
         action="append",
         default=[],
-        help="one argv item for the command provider; include {media} exactly once",
+        help=(
+            "one argv item for the command provider; include {media} exactly once. "
+            "An item that itself starts with '-' must use the joined form "
+            "(--command-arg=--model): argparse cannot tell a value from an option "
+            "otherwise. Supervisors that build argv from config should prefer "
+            "--command-argv-json, which has no such rule."
+        ),
+    )
+    native.add_argument(
+        "--command-argv-json",
+        help=(
+            "the whole command provider argv as one JSON array of strings, e.g. "
+            '\'["wrapper.py", "{media}", "--model", "base.bin"]\'. Carries items '
+            "that start with '-' with no quoting rule at all. Mutually exclusive "
+            "with --command-arg."
+        ),
     )
     native.add_argument("--command-timeout-seconds", type=float, default=3600.0)
     native.add_argument(
@@ -87,19 +102,50 @@ def _machine_result(result: dict[str, Any]) -> dict[str, Any]:
     return machine_result
 
 
+def _command_arguments(args: argparse.Namespace) -> list[str]:
+    """The command provider's argv, from either spelling.
+
+    ``--command-arg`` cannot carry an item that starts with ``-`` unless the
+    caller uses the joined form, because argparse reads the next token as an
+    option. A supervisor assembling argv from stored configuration hits this
+    the moment a wrapper takes a flag, and argparse's own message
+    ("expected one argument") names neither the cause nor the fix. So a
+    programmatic caller gets a spelling with no quoting rule at all.
+    """
+    encoded = args.command_argv_json
+    if encoded is None:
+        return list(args.command_arg)
+    if args.command_arg:
+        raise InvalidArgumentError(
+            "--command-arg and --command-argv-json are mutually exclusive; "
+            "pass the whole provider argv through one of them"
+        )
+    try:
+        decoded = json.loads(encoded)
+    except json.JSONDecodeError as error:
+        raise InvalidArgumentError(
+            f"--command-argv-json is not valid JSON: {error.msg}"
+        ) from error
+    if not isinstance(decoded, list) or any(
+        not isinstance(item, str) for item in decoded
+    ):
+        raise InvalidArgumentError("--command-argv-json must be a JSON array of strings")
+    return decoded
+
+
 def _run(args: argparse.Namespace, state: CancellationState, writer: MachineEventWriter | None) -> dict[str, Any]:
     progress = None if writer is None else lambda phase: writer.emit("phase", phase=phase)
     if args.package_command == "from-media":
         if args.provider == "fixture":
             if args.fixture is None:
-                raise ConversionError("--fixture is required for the fixture provider")
+                raise InvalidArgumentError("--fixture is required for the fixture provider")
             adapter = FixtureAsrAdapter(args.fixture, progress=progress)
         else:
             if args.command is None:
-                raise ConversionError("--command is required for the command provider")
+                raise InvalidArgumentError("--command is required for the command provider")
             command_adapter = CommandAsrAdapter(
                 args.command,
-                args.command_arg,
+                _command_arguments(args),
                 args.command_timeout_seconds,
                 progress=progress,
                 cancellation_requested=state.requested,

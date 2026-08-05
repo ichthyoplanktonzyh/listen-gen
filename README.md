@@ -70,6 +70,28 @@ python -m listen_gen package from-media input.mp4 \
   --created-at-ms 1785542400000 --output lesson.listenpkg
 ```
 
+Note `--command-arg=--model`: an argv item that starts with `-` needs the
+joined form, because argparse otherwise reads it as an option of `listen-gen`
+itself and exits with "expected one argument" before any machine event is
+written — a supervisor sees a process that produced no protocol at all, and
+nothing names the real cause.
+
+A supervisor building argv from stored configuration should therefore use
+`--command-argv-json`, which takes the whole provider argv as one JSON array
+of strings and has no quoting rule:
+
+```bash
+python -m listen_gen package from-media input.mp4 \
+  --provider command --command /opt/listen/bin/whisper-wrapper \
+  --command-argv-json '["transcribe", "{media}", "--model", "large-v3"]' \
+  --title "Lesson" --media-kind video --duration-ms 125000 \
+  --created-at-ms 1785542400000 --output lesson.listenpkg
+```
+
+The two spellings are equivalent; `--command-arg` and `--command-argv-json`
+cannot be combined. Argument mistakes are reported as `invalid_input`, never
+as a failure of a stage that never ran.
+
 A media file with exactly one audio stream is selected automatically. If it
 has multiple audio streams, `--audio-stream-index` is mandatory and refers to
 the container stream index reported by `ffprobe`. `--ffprobe-command`,
